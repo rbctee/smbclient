@@ -1,14 +1,54 @@
 package main
 
 import (
+	"errors"
 	"flag"
-	"fmt"
 	"log"
-	"net"
 	"os"
 
 	"github.com/projectdiscovery/go-smb2"
 )
+
+type SmbAuthenticationType struct {
+	IsLocal bool
+}
+
+type smbConfiguration struct {
+	Server             string
+	TcpPort            uint16
+	Username           string
+	Password           string
+	Domain             string
+	Authenticated      bool
+	AuthenticationType SmbAuthenticationType
+	Session            *smb2.Session
+}
+
+func NewSmbConfiguration() smbConfiguration {
+	smbConf := smbConfiguration{}
+	smbConf.TcpPort = 445
+	smbConf.Server = "127.0.0.1"
+	smbConf.Authenticated = false
+	smbConf.AuthenticationType = SmbAuthenticationType{
+		IsLocal: true,
+	}
+
+	return smbConf
+}
+
+func (smbConf *smbConfiguration) ListSMBShares() (shares []string, err error) {
+	if !smbConf.Authenticated {
+		return []string{}, errors.New("NULL Binding not implemented yet")
+	}
+
+	shares, err = smbConf.Session.ListSharenames()
+	if err != nil {
+		return []string{}, err
+	}
+
+	return shares, err
+
+}
 
 var (
 	WarningLog *log.Logger
@@ -16,69 +56,44 @@ var (
 	ErrorLog   *log.Logger
 )
 
-func ListSMBShares(server string, port uint, username string, password string) (shares []string, err error) {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", server, port))
-	if err != nil {
-		return []string{}, err
-	}
-	defer conn.Close()
-
-	d := &smb2.Dialer{
-		Initiator: &smb2.NTLMInitiator{
-			User:     username,
-			Password: password,
-		},
-	}
-
-	s, err := d.Dial(conn)
-	if err != nil {
-		return []string{}, err
-	}
-	defer s.Logoff()
-
-	shares, err = s.ListSharenames()
-	if err != nil {
-		return []string{}, err
-	}
-
-	return shares, err
-}
-
 func main() {
+	smbConf := NewSmbConfiguration()
+
 	InfoLog = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime)
 	WarningLog = log.New(os.Stdout, "WARNING: ", log.Ldate|log.Ltime)
 	ErrorLog = log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime)
 
 	serverAddress := flag.String("server", "", "Server address")
 	tcpPort := flag.Uint("port", 445, "TCP port")
-	userName := flag.String("username", "", "SMB username")
-	userPassword := flag.String("password", "", "SMB password")
+	smbUsername := flag.String("username", "", "SMB username")
+	smbPassword := flag.String("password", "", "SMB password")
 
 	flag.Parse()
 
 	if *serverAddress == "" {
+		ErrorLog.Println("Missing server parameter")
 		flag.Usage()
-		return
-	}
 
-	if *userName == "" {
-		flag.Usage()
 		return
-	}
-
-	if *userPassword == "" {
-		flag.Usage()
-		return
-	}
-
-	shares, err := ListSMBShares(*serverAddress, *tcpPort, *userName, *userPassword)
-	if err != nil {
-		ErrorLog.Printf("Error listing shares: %s\n", err)
 	} else {
-		fmt.Printf("List of shares on SMB server %s:\n", *serverAddress)
-
-		for _, s := range shares {
-			fmt.Printf("\t- %s\n", s)
-		}
+		smbConf.Server = *serverAddress
 	}
+
+	smbConf.TcpPort = uint16(*tcpPort)
+
+	if *smbUsername != "" || *smbPassword != "" {
+		if *smbUsername != "" && *smbPassword != "" {
+			smbConf.Username = *smbUsername
+			smbConf.Password = *smbPassword
+		} else {
+			if *smbUsername == "" {
+				ErrorLog.Println("Password set but username missing")
+			} else {
+				ErrorLog.Println("Username set but password missing")
+			}
+		}
+
+	}
+
+	menu(&smbConf)
 }
